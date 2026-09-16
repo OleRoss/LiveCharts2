@@ -65,7 +65,7 @@ public partial class SourceGenSKMapChart : InMemorySkiaSharpChart, IGeoMapView
     public override void DrawOnCanvas(SKCanvas canvas)
     {
         CoreCanvas.DisableAnimations = true;
-        CoreChart.Measure();
+        CoreChart.UpdateSynchronously();
         CoreCanvas.DrawFrame(new SkiaSharpDrawingContext(CoreCanvas, canvas, Background));
         // Match InMemorySkiaSharpChart.DrawOnCanvas: callers managing the
         // chart lifecycle themselves (ExplicitDisposing = true) take over

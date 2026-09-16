@@ -168,7 +168,7 @@ public abstract class InMemorySkiaSharpChart(IDrawnView? drawnView = null)
         skiaChart._isFirstDraw = true;
         if (ExplicitDisposing) skiaChart.DisableTooltipCache = true;
 
-        skiaChart.Measure();
+        skiaChart.UpdateSynchronously();
 
         skiaChart.Canvas.DrawFrame(
             new SkiaSharpDrawingContext(CoreCanvas, canvas, bg));

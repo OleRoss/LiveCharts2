@@ -19,6 +19,17 @@ public static class Program
         LiveCharts.Configure(config => config.UseDefaults());
         CoreMotionCanvas.IsTesting = true;
 
+        if (args.Length > 0 && args[0] == "stream")
+            return StreamingBenchmark.Run(args.AsSpan(1));
+        if (args.Length > 0 && args[0] == "index")
+            return IndexBenchmark.Run(args.AsSpan(1));
+        if (args.Length > 0 && args[0] == "raster")
+            return RasterBenchmark.Run(args.AsSpan(1));
+        if (args.Length > 0 && args[0] == "path-build")
+            return PathBuildBenchmark.Run(args.AsSpan(1));
+        if (args.Length > 0 && args[0] == "measure-profile")
+            return StreamingMeasureBenchmark.Run(args.AsSpan(1));
+
         _ = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
         return 0;
     }

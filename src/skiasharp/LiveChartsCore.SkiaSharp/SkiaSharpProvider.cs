@@ -35,6 +35,10 @@ namespace LiveChartsCore.SkiaSharpView;
 /// <inheritdoc cref="ChartEngine"/>
 public class SkiaSharpProvider : ChartEngine
 {
+    /// <inheritdoc />
+    public override ISeriesRenderOverride? GetRenderOverride(ISeries series) =>
+        series as ISeriesRenderOverride;
+
     /// <inheritdoc cref="ChartEngine.GetDefaultMapFactory"/>
     public override IMapFactory GetDefaultMapFactory()
         => new MapFactory();

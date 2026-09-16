@@ -70,6 +70,8 @@ public abstract class Chart
     private LvcSize _previousSize = new();
     private int _nextSeriesId = 0;
     private long _lastMeasureTimeStamp = -1;
+    private bool _isMeasuringUpdate;
+    private bool _hasPendingMeasure;
 
 #if NET5_0_OR_GREATER
     internal bool _isMobile;
@@ -309,6 +311,28 @@ public abstract class Chart
     }
 
     /// <summary>
+    /// Runs a chart update immediately on the calling thread, without throttling or dispatching.
+    /// </summary>
+    /// <param name="isAutomaticUpdate">
+    /// When true, respects <see cref="IChartView.AutoUpdateEnabled"/>. The default is a manual update.
+    /// </param>
+    /// <remarks>
+    /// Call only on the view's UI thread (or the owning thread of an in-memory chart).
+    /// The caller must pace updates, for example with a UI frame callback. The engine's normal
+    /// loaded/active-render checks still apply: an update can be skipped if no new draw has started
+    /// since the last measurement. When measurement runs, it completes before this method returns;
+    /// rendering still occurs on the view's normal render loop.
+    /// Exceptions from measurement propagate to the caller. A call made during measurement is
+    /// coalesced into a later scheduled update instead of recursively measuring.
+    /// This does not cancel previously scheduled updates; use one update scheduling strategy.
+    /// </remarks>
+    public void UpdateSynchronously(bool isAutomaticUpdate = false)
+    {
+        if (isAutomaticUpdate && !View.AutoUpdateEnabled) return;
+        MeasureUpdate();
+    }
+
+    /// <summary>
     /// Finds the points near to the specified point.
     /// </summary>
     /// <param name="pointerPosition">The pointer position.</param>
@@ -375,12 +399,17 @@ public abstract class Chart
     /// </summary>
     public virtual void Unload()
     {
-        _lastMeasureTimeStamp = -1;
-        IsLoaded = false;
-        _everMeasuredElements.Clear();
-        _toDeleteElements.Clear();
-        _activePoints.Clear();
-        Canvas.Dispose();
+        lock (Canvas.Sync)
+        {
+            _lastMeasureTimeStamp = -1;
+            IsLoaded = false;
+            foreach (var series in _everMeasuredElements.OfType<ISeries>().ToArray())
+                LiveCharts.DefaultSettings.GetProvider().GetRenderOverride(series)?.OnRemoved(View, series);
+            _everMeasuredElements.Clear();
+            _toDeleteElements.Clear();
+            _activePoints.Clear();
+            Canvas.Dispose();
+        }
     }
 
     // Whether panning gestures actually move the chart. False on the base
@@ -639,10 +668,7 @@ public abstract class Chart
             {
                 try
                 {
-                    lock (Canvas.Sync)
-                    {
-                        Measure();
-                    }
+                    MeasureUpdate();
                 }
                 catch (Exception ex)
                 {
@@ -655,6 +681,33 @@ public abstract class Chart
                 }
             });
         });
+    }
+
+    private void MeasureUpdate()
+    {
+        lock (Canvas.Sync)
+        {
+            if (_isMeasuringUpdate)
+            {
+                _hasPendingMeasure = true;
+                return;
+            }
+
+            _isMeasuringUpdate = true;
+            try
+            {
+                Measure();
+            }
+            finally
+            {
+                _isMeasuringUpdate = false;
+                if (_hasPendingMeasure)
+                {
+                    _hasPendingMeasure = false;
+                    Update(new ChartUpdateParams { IsAutomaticUpdate = false });
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -758,7 +811,7 @@ public abstract class Chart
     /// </summary>
     public virtual void ApplyTheme() =>
         // this is not optimal, we should only update the colors instead of re-measuring everything.
-        Measure();
+        UpdateSynchronously();
 
     /// <summary>
     /// Collects and deletes from the UI the unused visuals.

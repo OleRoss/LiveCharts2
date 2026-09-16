@@ -1,0 +1,165 @@
+diff --git a/tests/AvaloniaStreamingBench/Program.cs b/tests/AvaloniaStreamingBench/Program.cs
+index 17d5fb611..3902d9d05 100644
+--- a/tests/AvaloniaStreamingBench/Program.cs
++++ b/tests/AvaloniaStreamingBench/Program.cs
+@@ -12,6 +12,7 @@ using LiveChartsCore.Defaults;
+ using LiveChartsCore.Drawing;
+ using LiveChartsCore.Kernel;
+ using LiveChartsCore.Kernel.Sketches;
++using LiveChartsCore.Motion;
+ using LiveChartsCore.SkiaSharpView;
+ using LiveChartsCore.SkiaSharpView.Avalonia;
+ using LiveChartsCore.SkiaSharpView.Drawing;
+@@ -60,6 +61,7 @@ internal static class Program
+             EveryFrame = args.Contains("--every-frame"),
+             ManualUpdates = args.Contains("--manual-updates"),
+             TooltipShadow = ReadString("--tooltip-shadow", "default"),
++            FrameTrace = args.Contains("--frame-trace"),
+             Output = ReadString("--output", "artifacts/avalonia-baseline.json")
+         };
+         if (Settings.Scheduler is not ("timer" or "raf") || Settings.Viewport is not ("full" or "live" or "auto") ||
+@@ -133,6 +135,7 @@ internal sealed record Options
+     public bool EveryFrame { get; init; }
+     public bool ManualUpdates { get; init; }
+     public string TooltipShadow { get; init; } = "default";
++    public bool FrameTrace { get; init; }
+     public string Output { get; init; } = "";
+ }
+ 
+@@ -163,6 +166,9 @@ internal sealed class Benchmark
+     private readonly ConcurrentQueue<double> _renderWork = new();
+     private readonly ConcurrentQueue<double> _displayedBatchAge = new();
+     private readonly List<double> _measureWork = [];
++    private readonly ConcurrentQueue<FrameTraceEvent> _frameTrace = new();
++    private FieldInfo? _traceHook;
++    private long _rafSequence;
+     private readonly AllocationProbe _measureAllocations = new();
+     private readonly AllocationProbe _drawAllocations = new();
+     private readonly AllocationProbe _tooltipAllocations = new();
+@@ -252,6 +258,15 @@ internal sealed class Benchmark
+         {
+             await Task.Delay(2_000);
+             if (_options.ManualUpdates) _chart.AutoUpdateEnabled = false;
++            if (_options.FrameTrace)
++            {
++                _traceHook = typeof(LiveChartsCore.SkiaSharpView.Avalonia.MotionCanvas)
++                    .GetField("FrameTrace", BindingFlags.Static | BindingFlags.NonPublic)!;
++                _traceHook.SetValue(null, (Action<CoreMotionCanvas, string, long>)((canvas, stage, operation) =>
++                {
++                    if (ReferenceEquals(canvas, _chart.CoreChart.Canvas)) Trace(stage, operation);
++                }));
++            }
+             if (_options.Pointer)
+             {
+                 _movePointer = typeof(Chart).GetMethod("InvokePointerMove", BindingFlags.Instance | BindingFlags.NonPublic)!
+@@ -266,12 +281,14 @@ internal sealed class Benchmark
+                 _chart.CoreChart.Canvas.AddGeometry(0, new DrawProbe(() =>
+                 {
+                     _drawStarted = _clock.IsRunning ? Stopwatch.GetTimestamp() : 0;
++                    Trace("geometry-start");
+                     _drawAllocations.Begin();
+                 })
+                 { Fill = new SolidColorPaint(SKColors.Black), Width = 1, Height = 1 }).ZIndex = double.MinValue;
+                 _chart.CoreChart.Canvas.AddGeometry(4, new DrawProbe(() =>
+                 {
+                     if (_drawStarted == 0 || !_clock.IsRunning) return;
++                    Trace("geometry-end");
+                     _drawAllocations.End();
+                     _drawTimes.Enqueue(_clock.Elapsed.TotalMilliseconds);
+                     if (_latestMeasuredBatch > _lastDrawnBatch)
+@@ -286,6 +303,7 @@ internal sealed class Benchmark
+             _chart.CoreChart.Measuring += _ =>
+             {
+                 _measureStarted = Stopwatch.GetTimestamp();
++                Trace("measure-start");
+                 _measureAllocations.Begin();
+             };
+             _chart.CoreChart.UpdateStarted += _ =>
+@@ -293,6 +311,7 @@ internal sealed class Benchmark
+                 _measureAllocations.End();
+                 _measureWork.Add(Stopwatch.GetElapsedTime(_measureStarted).TotalMilliseconds);
+                 _latestMeasuredBatch = _consumedBatches;
++                Trace("measure-end");
+             };
+             _allocatedStart = GC.GetTotalAllocatedBytes();
+             _cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+@@ -337,6 +356,8 @@ internal sealed class Benchmark
+     private void Frame(TimeSpan time)
+     {
+         if (!_clock.IsRunning || _finishing) return;
++        var frame = ++_rafSequence;
++        Trace("raf-enter", frame);
+         _callbackTimes.Add(_clock.Elapsed.TotalMilliseconds);
+         if (_options.Scheduler == "raf" && (_options.EveryFrame || _clock.Elapsed.TotalMilliseconds - _lastPublishTime >= _options.UpdateMs))
+         {
+@@ -344,6 +365,7 @@ internal sealed class Benchmark
+             Tick(null, EventArgs.Empty);
+         }
+         Window.RequestAnimationFrame(Frame);
++        Trace("raf-exit", frame);
+     }
+ 
+     private void Tick(object? sender, EventArgs e)
+@@ -414,6 +436,7 @@ internal sealed class Benchmark
+         _stop.Cancel();
+         await _producerTask;
+         _clock.Stop();
++        _traceHook?.SetValue(null, null);
+         if (_clock.Elapsed.TotalSeconds - _lastResourceTime >= 1) CaptureResources();
+         var draws = _drawTimes.ToArray();
+         var result = new
+@@ -470,7 +493,9 @@ internal sealed class Benchmark
+             skiaManagedVersion = typeof(SKCanvas).Assembly.GetName().Version?.ToString(),
+             skiaProductVersion = FileVersionInfo.GetVersionInfo(typeof(SKCanvas).Assembly.Location).ProductVersion,
+             skiaNativeVersion = SkiaSharpVersion.Native.ToString(),
+-            tieredCompilationEnvironment = Environment.GetEnvironmentVariable("DOTNET_TieredCompilation")
++            tieredCompilationEnvironment = Environment.GetEnvironmentVariable("DOTNET_TieredCompilation"),
++            frameTrace = _options.FrameTrace ? _frameTrace.ToArray() : null,
++            timestampFrequency = Stopwatch.Frequency
+         };
+         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_options.Output))!);
+         var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+@@ -498,6 +523,14 @@ internal sealed class Benchmark
+     }
+ 
+     private static double Value(int i, int s) => Math.Sin(i * .005) + s;
++    private void Trace(string stage, long operation = 0)
++    {
++        if (!_options.FrameTrace || !_clock.IsRunning) return;
++        _frameTrace.Enqueue(new FrameTraceEvent(stage, operation, Stopwatch.GetTimestamp(),
++            Environment.CurrentManagedThreadId, Interlocked.Read(ref _consumedBatches),
++            Interlocked.Read(ref _latestMeasuredBatch)));
++    }
++
+     [DllImport("user32.dll")]
+     [return: MarshalAs(UnmanagedType.Bool)]
+     private static extern bool IsWindowVisible(IntPtr window);
+@@ -506,6 +539,8 @@ internal sealed class Benchmark
+     [return: MarshalAs(UnmanagedType.Bool)]
+     private static extern bool IsIconic(IntPtr window);
+ 
++    private readonly record struct FrameTraceEvent(string Stage, long Operation, long Timestamp,
++        int Thread, long ConsumedBatch, long MeasuredBatch);
+     private static IEnumerable<double> Intervals(IEnumerable<double> values) => values.Zip(values.Skip(1), (a, b) => b - a);
+     private static object Statistics(IEnumerable<double> values)
+     {
+diff --git a/tests/AvaloniaStreamingBench/Run.ps1 b/tests/AvaloniaStreamingBench/Run.ps1
+index c4010290c..3abcafbf8 100644
+--- a/tests/AvaloniaStreamingBench/Run.ps1
++++ b/tests/AvaloniaStreamingBench/Run.ps1
+@@ -10,6 +10,7 @@ param(
+     [switch]$SynchronousMeasure,
+     [switch]$EveryFrame,
+     [switch]$ManualUpdates,
++    [switch]$FrameTrace,
+     [ValidateSet('default', 'on', 'off')][string]$TooltipShadow = 'default',
+     [switch]$HighResolutionTimer,
+     [switch]$OnePixelStroke,
+@@ -56,6 +57,7 @@ try {
+     if ($SynchronousMeasure) { $benchmarkArguments += '--synchronous-measure' }
+     if ($EveryFrame) { $benchmarkArguments += '--every-frame' }
+     if ($ManualUpdates) { $benchmarkArguments += '--manual-updates' }
++    if ($FrameTrace) { $benchmarkArguments += '--frame-trace' }
+     if ($HighResolutionTimer) { $benchmarkArguments += '--high-resolution-timer' }
+     if ($OnePixelStroke) { $benchmarkArguments += '--one-pixel-stroke' }
+     if ($RasterCache) { $benchmarkArguments += '--raster-cache' }

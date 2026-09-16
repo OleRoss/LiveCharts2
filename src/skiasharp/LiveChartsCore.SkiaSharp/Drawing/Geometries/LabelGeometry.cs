@@ -58,12 +58,12 @@ public class LabelGeometry : BaseLabelGeometry, IDrawnElement<SkiaSharpDrawingCo
                 _previousKey != BuildBlobKey() ||          //   - the key changed, structural equality between previous and current
                 _previousPaint != skPaint;                 //   - the paint changed, otherwise we will be using disposed resources
 
-            if (!changed || string.IsNullOrEmpty(Text))
+            if (!changed)
                 return _activeBlobs;
 
             DisposeActiveBlobs();
 
-            _activeBlobs = this.AsBlobArray();
+            _activeBlobs = string.IsNullOrEmpty(Text) ? BlobArray.Empty() : this.AsBlobArray();
             _previousKey = BuildBlobKey();
             _previousPaint = lvcPaint._skiaPaint;          // non-null after AsBlobArray ran
 
@@ -109,6 +109,7 @@ public class LabelGeometry : BaseLabelGeometry, IDrawnElement<SkiaSharpDrawingCo
 
             positionedBlob.Blob.Dispose();
         }
+        _activeBlobs = BlobArray.Empty();
     }
 
     internal override void OnDisposed()
