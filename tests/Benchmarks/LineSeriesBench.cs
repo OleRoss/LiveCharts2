@@ -12,14 +12,16 @@ namespace Benchmarks;
 [SimpleJob(RuntimeMoniker.Net80, warmupCount: 3, iterationCount: 8)]
 public class LineSeriesBench
 {
+    // Historical benchmark names are retained for report comparison compatibility.
+    // All methods below export images: DrawOnCanvas resets first-draw state and unloads.
+    // Use the `stream` CLI for retained chart update measurements.
     [Params(1_000, 10_000)]
     public int PointCount;
 
     private ObservableValue[] _values = null!;
     private SKCartesianChart _chart = null!;
 
-    // A chart pre-measured once, so Update/Gap benchmarks isolate the incremental cost
-    // rather than first-draw setup.
+    // Reuses the chart/model objects, but export still resets and unloads chart state.
     private SKCartesianChart _primedChart = null!;
     private ObservableValue[] _primedValues = null!;
 
@@ -63,11 +65,11 @@ public class LineSeriesBench
         BenchHarness.Render(chart);
     }
 
-    // Warm-path cost: re-invalidate an unchanged, already-measured chart.
+    // Repeated image export of an unchanged chart, including export lifecycle work.
     [Benchmark]
     public void Reinvalidate() => BenchHarness.Render(_chart);
 
-    // Incremental update: one point's value changes, trigger re-invalidate.
+    // Export after changing one point; this does not isolate an incremental UI update.
     [Benchmark]
     public void UpdateOnePoint()
     {

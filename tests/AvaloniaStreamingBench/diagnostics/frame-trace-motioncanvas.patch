@@ -1,0 +1,83 @@
+diff --git a/src/skiasharp/LiveChartsCore.SkiaSharp.Avalonia/MotionCanvas.cs b/src/skiasharp/LiveChartsCore.SkiaSharp.Avalonia/MotionCanvas.cs
+index 5774f9b02..0959c1a90 100644
+--- a/src/skiasharp/LiveChartsCore.SkiaSharp.Avalonia/MotionCanvas.cs
++++ b/src/skiasharp/LiveChartsCore.SkiaSharp.Avalonia/MotionCanvas.cs
+@@ -32,6 +32,7 @@ using Avalonia.Threading;
+ using LiveChartsCore.Motion;
+ using LiveChartsCore.SkiaSharpView.Drawing;
+ using SkiaSharp;
++using System.Threading;
+ 
+ namespace LiveChartsCore.SkiaSharpView.Avalonia;
+ 
+@@ -41,6 +42,11 @@ namespace LiveChartsCore.SkiaSharpView.Avalonia;
+ public class MotionCanvas : UserControl
+ {
+     private bool _isDeatached = false;
++    private static long _traceOperationId;
++
++    // Temporary opt-in diagnostic seam for separating UI publication, dispatch and drawing.
++    // The benchmark installs a nonblocking callback; the normal path only checks for null.
++    internal static Action<CoreMotionCanvas, string, long>? FrameTrace;
+ 
+     static MotionCanvas()
+     {
+@@ -75,10 +81,29 @@ public class MotionCanvas : UserControl
+     {
+         if (_isDeatached) return;
+ 
+-        context.Custom(new ChartFrameOperation(CanvasCore, Bounds, GetBackground()));
++        var trace = FrameTrace;
++        var operationId = trace is null ? 0 : Interlocked.Increment(ref _traceOperationId);
++        trace?.Invoke(CanvasCore, "control-render-start", operationId);
++        context.Custom(new ChartFrameOperation(CanvasCore, Bounds, GetBackground(), operationId));
+ 
+-        if (CanvasCore.IsValid) return;
+-        _ = Dispatcher.UIThread.InvokeAsync(InvalidateVisual, DispatcherPriority.Background);
++        if (!CanvasCore.IsValid)
++        {
++            if (trace is null)
++                _ = Dispatcher.UIThread.InvokeAsync(InvalidateVisual, DispatcherPriority.Background);
++            else
++                QueueTracedInvalidation(trace, operationId);
++        }
++        trace?.Invoke(CanvasCore, "control-render-end", operationId);
++    }
++
++    private void QueueTracedInvalidation(Action<CoreMotionCanvas, string, long> trace, long operationId)
++    {
++        trace(CanvasCore, "continuation-queued", operationId);
++        _ = Dispatcher.UIThread.InvokeAsync(() =>
++        {
++            trace(CanvasCore, "continuation-run", operationId);
++            InvalidateVisual();
++        }, DispatcherPriority.Background);
+     }
+ 
+     private void OnCanvasCoreInvalidated(CoreMotionCanvas sender) =>
+@@ -105,21 +130,24 @@ public class MotionCanvas : UserControl
+     // based on:
+     // https://github.com/AvaloniaUI/Avalonia/blob/release/11.0.0/samples/RenderDemo/Pages/CustomSkiaPage.cs
+     private class ChartFrameOperation(
+-        CoreMotionCanvas motionCanvas, Rect bounds, SKColor background)
++        CoreMotionCanvas motionCanvas, Rect bounds, SKColor background, long operationId)
+             : ICustomDrawOperation
+     {
+         public Rect Bounds { get; } = bounds;
+ 
+         public void Render(ImmediateDrawingContext context)
+         {
++            FrameTrace?.Invoke(motionCanvas, "custom-draw-start", operationId);
+             if (!context.TryGetFeature<ISkiaSharpApiLeaseFeature>(out var leaseFeature))
+                 throw new Exception("SkiaSharp is not supported.");
+ 
+             using var lease = leaseFeature.Lease();
+ 
++            FrameTrace?.Invoke(motionCanvas, "drawframe-call", operationId);
+             motionCanvas.DrawFrame(
+                 new SkiaSharpDrawingContext(
+                     motionCanvas, lease.SkCanvas, background, clearCanvasOnNewFrame: false));
++            FrameTrace?.Invoke(motionCanvas, "custom-draw-end", operationId);
+         }
+ 
+         public void Dispose() { }

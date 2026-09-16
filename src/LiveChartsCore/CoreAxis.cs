@@ -1004,17 +1004,25 @@ public abstract class CoreAxis<TTextGeometry, TLineGeometry>
         var h = 0f;
         var r = (float)LabelsRotation;
 
+        var textGeometry = new TTextGeometry();
         foreach (var i in EnumerateSeparators(start, max, s))
         {
-            var textGeometry = new TTextGeometry
+            LvcSize m;
+            try
             {
-                Text = TryGetLabelOrLogError(labeler, i),
-                TextSize = ts,
-                RotateTransform = r,
-                Padding = Padding,
-                Paint = LabelsPaint
-            };
-            var m = textGeometry.Measure();
+                textGeometry.Text = TryGetLabelOrLogError(labeler, i);
+                textGeometry.TextSize = ts;
+                textGeometry.RotateTransform = r;
+                textGeometry.Padding = Padding;
+                textGeometry.Paint = LabelsPaint;
+                m = textGeometry.Measure();
+            }
+            finally
+            {
+                // Keep the geometry's motion properties, but release off-canvas native text
+                // after each label. Each formatter/font builder still runs as before.
+                textGeometry.OnDisposed();
+            }
             if (m.Width > w) w = m.Width;
             if (m.Height > h) h = m.Height;
         }
@@ -1244,18 +1252,23 @@ public abstract class CoreAxis<TTextGeometry, TLineGeometry>
 
         if (max - min == 0) return maxLabelSize;
 
+        var textGeometry = new TTextGeometry();
         foreach (var i in EnumerateSeparators(min, max, s))
         {
-            var textGeometry = new TTextGeometry
+            LvcSize m;
+            try
             {
-                Text = labeler(i),
-                TextSize = (float)TextSize,
-                RotateTransform = (float)LabelsRotation,
-                Padding = Padding,
-                Paint = LabelsPaint
-            };
-
-            var m = textGeometry.Measure();
+                textGeometry.Text = labeler(i);
+                textGeometry.TextSize = (float)TextSize;
+                textGeometry.RotateTransform = (float)LabelsRotation;
+                textGeometry.Padding = Padding;
+                textGeometry.Paint = LabelsPaint;
+                m = textGeometry.Measure();
+            }
+            finally
+            {
+                textGeometry.OnDisposed();
+            }
 
             maxLabelSize = new LvcSize(
                 maxLabelSize.Width > m.Width ? maxLabelSize.Width : m.Width,

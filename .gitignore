@@ -347,3 +347,6 @@ nuget.exe
 /.claude/settings.local.json
 /.claude/screenshots/
 /.claude/worktrees/
+
+# Local performance investigation reports and evidence
+/docs/performance/
