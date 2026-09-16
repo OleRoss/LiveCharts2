@@ -131,3 +131,50 @@ jobs:
             echo
             echo 'The build artifact also contains the packages and debug symbols for offline use.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  comment:
+    if: github.event_name == 'pull_request_target'
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Update preview package comment
+        uses: actions/github-script@v8
+        env:
+          PREVIEW_VERSION: ${{ needs.build.outputs.version }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- livecharts-preview-packages -->';
+            const version = process.env.PREVIEW_VERSION;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              '## Preview NuGet packages',
+              '',
+              `Published **${version}** for commit ${process.env.HEAD_SHA}.`,
+              '',
+              `Feed: https://nuget.pkg.github.com/${context.repo.owner}/index.json`,
+              '',
+              '- LiveChartsCore',
+              '- LiveChartsCore.SkiaSharpView',
+              '- LiveChartsCore.SkiaSharpView.Avalonia',
+              '',
+              '```powershell',
+              `dotnet add package LiveChartsCore.SkiaSharpView.Avalonia --version ${version}`,
+              '```',
+              '',
+              'Use the same version for any direct Core or SkiaSharp references.',
+              'The feed requires a GitHub token with read:packages access.',
+              '',
+              `[Build and downloadable packages](${runUrl}) · [Feed setup](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/master/docs/preview-packages.md)`
+            ].join('\n');
+            const params = { ...context.repo, issue_number: context.issue.number };
+            const comments = await github.paginate(github.rest.issues.listComments, params);
+            const existing = comments.find(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...params, body });
+            }

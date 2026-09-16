@@ -13,7 +13,9 @@ The workflow builds these packages with the same version:
 
 PR versions use `<base>-pr.<PR number>.<run number>.<attempt>`; manual runs use
 `<base>-preview.<run number>.<attempt>`. The base comes from `Directory.Build.props`.
-Find the exact version in the workflow run summary. These are experimental
+After a successful publish, the workflow posts the version, feed and installation
+command in a PR comment, updating that comment on subsequent publishes.
+The version is also in the workflow run summary. These are experimental
 builds, not upstream releases. Other UI frameworks are not included.
 
 ## Install
