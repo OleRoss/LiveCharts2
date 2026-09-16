@@ -1,0 +1,133 @@
+name: Preview packages
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-packages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'OleRoss/LiveCharts2' && (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: windows-2025
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      AVALONIA_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v6.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5.0.1
+        with:
+          dotnet-version: '10.0.201'
+
+      - name: Choose prerelease version
+        id: version
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          [xml] $props = Get-Content Directory.Build.props
+          $baseVersion = [string]($props.Project.PropertyGroup.LiveChartsVersion | Where-Object { $_ } | Select-Object -First 1)
+          if ($baseVersion -notmatch '^(\d+\.\d+\.\d+)') { throw "Cannot read LiveCharts base version" }
+          $baseVersion = $Matches[1]
+          $suffix = if ($env:PR_NUMBER) { "pr.$env:PR_NUMBER" } else { 'preview' }
+          $version = "$baseVersion-$suffix.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Pack Core, SkiaSharp and Avalonia
+        shell: pwsh
+        env:
+          PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $projects = @(
+            'src/LiveChartsCore/LiveChartsCore.csproj',
+            'src/skiasharp/LiveChartsCore.SkiaSharp/LiveChartsCore.SkiaSharpView.csproj',
+            'src/skiasharp/LiveChartsCore.SkiaSharp.Avalonia/LiveChartsCore.SkiaSharpView.Avalonia.csproj'
+          )
+          foreach ($project in $projects) {
+            dotnet pack $project -c Release -o artifacts/preview /p:IsPacking=true "/p:LiveChartsVersion=$env:PREVIEW_VERSION" "/p:RepositoryUrl=https://github.com/$env:GITHUB_REPOSITORY"
+            if ($LASTEXITCODE -ne 0) { throw "Packing $project failed" }
+          }
+
+      - name: Verify package versions and dependencies
+        shell: pwsh
+        env:
+          PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $ids = @('LiveChartsCore', 'LiveChartsCore.SkiaSharpView', 'LiveChartsCore.SkiaSharpView.Avalonia')
+          $packages = @(Get-ChildItem artifacts/preview/*.nupkg)
+          if ($packages.Count -ne $ids.Count) { throw "Expected exactly three packages" }
+          foreach ($id in $ids) {
+            $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path "artifacts/preview/$id.$env:PREVIEW_VERSION.nupkg"))
+            try {
+              $entry = $archive.Entries | Where-Object { $_.FullName -like '*.nuspec' }
+              $reader = [IO.StreamReader]::new($entry.Open())
+              try { [xml] $spec = $reader.ReadToEnd() } finally { $reader.Dispose() }
+              if ($spec.package.metadata.version -ne $env:PREVIEW_VERSION) { throw "Wrong version in $id" }
+              foreach ($dependency in $spec.SelectNodes("//*[local-name()='dependency']")) {
+                if ($dependency.id -like 'LiveCharts*' -and ($dependency.id -notin $ids -or $dependency.version.Trim('[', ']', ' ') -ne $env:PREVIEW_VERSION)) {
+                  throw "Unexpected dependency in ${id}: $($dependency.OuterXml)"
+                }
+              }
+            } finally { $archive.Dispose() }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-packages
+          path: artifacts/preview/*.*nupkg
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: preview-packages
+          path: packages
+
+      - uses: actions/setup-dotnet@v5.0.1
+        with:
+          dotnet-version: '10.0.201'
+
+      - name: Publish to GitHub Packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+        run: dotnet nuget push 'packages/*.nupkg' --source "$FEED_URL" --api-key "$GH_TOKEN" --skip-duplicate --no-symbols
+
+      - name: Record package details
+        env:
+          PREVIEW_VERSION: ${{ needs.build.outputs.version }}
+          FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+        run: |
+          {
+            echo '## Preview NuGet packages'
+            echo
+            echo "Version: \`$PREVIEW_VERSION\`"
+            echo
+            echo "Feed: $FEED_URL"
+            echo
+            echo '- LiveChartsCore'
+            echo '- LiveChartsCore.SkiaSharpView'
+            echo '- LiveChartsCore.SkiaSharpView.Avalonia'
+            echo
+            echo 'The build artifact also contains the packages and debug symbols for offline use.'
+          } >> "$GITHUB_STEP_SUMMARY"
