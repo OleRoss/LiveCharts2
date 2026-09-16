@@ -54,7 +54,7 @@ pointer moves (a cached delegate to the engine method), while recording `Show` w
 text in both arms, changing only its drop-shadow filter. Compare these two values together;
 the `default` setting leaves theme initialization untouched and is a separate control.
 Disabling the shadow changes visual appearance and must be reported as a tradeoff.
-For render timeline diagnostics, apply both patches in `docs/performance/` named
+For render timeline diagnostics, apply both patches in `tests/AvaloniaStreamingBench/diagnostics/` named
 `frame-trace-motioncanvas.patch` and `frame-trace-harness.patch`, rebuild, then use
 `--frame-trace`. They record control render, queued continuation, custom draw,
 geometry, measure, and RAF events with thread and batch IDs. Traced runs are

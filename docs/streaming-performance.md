@@ -23,7 +23,7 @@ Do not compare the existing image-export helper directly with retained update re
 - Per-acquisition updates versus presentation-rate updates.
 - Full-history overview versus a moving live window, with pointer lookup and axis changes.
 
-Raw results and the final HTML report will identify which experiments ran, their configuration and limitations. Proposed experiments are not measured improvements.
+Keep raw results with each experiment's configuration and limitations. Proposed experiments are not measured improvements.
 
 ## Data ownership
 
@@ -159,15 +159,15 @@ bounded by viewport width and the index rather than scanning the complete histor
 The generic source adds cached numeric coordinates and an index alongside the model.
 Smaller index leaf blocks improved selection speed in the measured workload but increased
 memory. The optional raster cache adds cropped pixel surfaces for each series and chart
-view. See the report's measured memory figures when deciding whether these tradeoffs fit
-your acquisition duration and channel count.
+view. Measure memory for your acquisition duration and channel count when deciding
+whether these tradeoffs fit your application.
 
 ## Reproduce the sustained target workload
 
 The fixed-overview configuration reached **61.25 newly measured chart draws/s** in one
 75-second trial and **58.55** in the final clean repeat. Repeatable strict 60 FPS is not
-established; this is the accepted stopping point for the current iteration. Evidence and
-frame-time tails are in [the HTML report](performance/report.html). Moving/automatically expanding viewports and
+established; this is the accepted stopping point for the current iteration.
+Moving/automatically expanding viewports and
 default tooltip shadows have not met the same target. This measures chart drawing,
 not physical monitor presents.
 
